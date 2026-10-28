@@ -22,5 +22,11 @@ class OrderService:
         return self.payment_gateway.charge(amount)
 
 
+    async def checkout_async(self, amount):
+        if amount <= 0:
+            raise ValueError("Invalid amount")
+
+        return await self.payment_gateway.charge(amount)    
+
 
     

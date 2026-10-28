@@ -1,4 +1,4 @@
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -74,4 +74,17 @@ def test_checkout_patched():
         result = service.checkout(100)
 
         assert result == "payment-123"
-        gateway.charge.assert_called_once_with(100)   
+        gateway.charge.assert_called_once_with(100)
+
+
+@pytest.mark.asyncio
+async def test_checkout_async():
+    gateway = AsyncMock()
+    gateway.charge.return_value = "payment-123"
+
+    service = OrderService(gateway)
+
+    result = await service.checkout_async(100)
+
+    assert result == "payment-123"
+    gateway.charge.assert_awaited_once_with(100)           
