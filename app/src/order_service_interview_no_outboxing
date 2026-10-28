@@ -1,0 +1,78 @@
+from dataclasses import dataclass
+from enum import Enum
+
+from psycopg_pool import AsyncConnectionPool
+
+
+class PaymentStatus(str, Enum):
+    PENDING = "PENDING"
+    PAID = "PAID"
+    FAILED = "FAILED"
+
+
+@dataclass(frozen=True)
+class OrderCreated:
+    order_id: str
+    payment_status: PaymentStatus
+
+
+class OrderService:
+    def __init__(
+        self,
+        payment_service,
+        orders_repo,
+        db_pool: AsyncConnectionPool,
+    ):
+        self.payment_service = payment_service
+        self.orders_repo = orders_repo
+        self.db_pool = db_pool
+
+    async def order(self, order) -> OrderCreated:
+        self.validate_order(order)
+
+        # 1. Save order as PENDING.
+        # Connection context commits on success.
+        async with self.db_pool.connection() as conn:
+            order_id = await self.orders_repo.store(
+                order,
+                conn,
+                payment_status=PaymentStatus.PENDING,
+            )
+
+        # 2. Call external payment provider.
+        # No DB transaction is open.
+        try:
+            payment = await self.payment_service.pay(
+                order,
+                idempotency_key=str(order_id),
+            )
+
+            status = (
+                PaymentStatus.PAID
+                if payment.success
+                else PaymentStatus.FAILED
+            )
+
+        except Exception:
+            # Timeout or network failure:
+            # payment outcome may be unknown.
+            # Leave order PENDING for reconciliation.
+            raise
+
+        # 3. Update payment status.
+        async with self.db_pool.connection() as conn:
+            await self.orders_repo.update_payment_status(
+                order_id,
+                status,
+                conn,
+            )
+
+        # 4. Return result.
+        return OrderCreated(
+            order_id=str(order_id),
+            payment_status=status,
+        )
+
+    def validate_order(self, order):
+        if order is None:
+            raise ValueError("Order is required")
